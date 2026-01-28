@@ -2,13 +2,13 @@ import streamlit as st
 from PIL import Image
 import io
 import zipfile
-# 新しい助っ人をインポート！
+# 助っ人をインポート（座標を受け取れるようにするよ！）
 from streamlit_cropper import st_cropper
 
-st.set_page_config(page_title="スクショ切り取り職人V3", layout="wide")
+st.set_page_config(page_title="スクショ切り取り職人V4", layout="wide")
 
-st.title("🍄 スクショ切り取り職人 V3 (ビジュアル版)")
-st.write("1枚目の画像で「残したい範囲」を囲ってね！その設定で全部カットするよ！✂️")
+st.title("🍄 スクショ切り取り職人 V4 (上下左右自由カット版)")
+st.write("1枚目で決めた「赤い枠の範囲」で、全画像を同じ比率で切り取るよ！✂️")
 
 # ファイルアップロード
 uploaded_files = st.file_uploader("画像をまとめてアップロードしてね", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
@@ -19,70 +19,94 @@ if uploaded_files:
     
     # 1枚目を読み込む
     first_image = Image.open(uploaded_files[0])
+    orig_w, orig_h = first_image.size
     
-    # 画面分割（左：操作画面、右：結果プレビュー）
-    col1, col2 = st.columns([2, 1]) # 左を広めに
+    # 画面分割
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.info("👇 この枠を動かして「残したい部分（下の部分）」を囲ってね！")
-        # ここが魔法のクロップ機能！
-        # box_color: 枠の色, aspect_ratio: 自由な形にするならNone
-        cropped_box = st_cropper(first_image, realtime_update=True, box_color='#FF0000', aspect_ratio=None)
+        st.info("👇 この赤い枠で「残したい範囲」を囲ってね！上下左右どこでもOK！")
+        # 【重要】return_type='box' を指定して、画像じゃなくて「座標」を受け取るよ！
+        box_coords = st_cropper(
+            first_image,
+            realtime_update=True,
+            box_color='#FF0000',
+            aspect_ratio=None,
+            return_type='box' # ここがポイント！
+        )
         
-        # 枠の情報を取得（これで「上から何ピクセル削ったか」を計算するよ）
-        # st_cropperは「切り抜かれた画像」を返してくるけど、
-        # 内部的に座標を知るために、ちょっと計算するよ
-        
-        # 元の高さ
-        orig_w, orig_h = first_image.size
-        # 切り抜かれた後の高さ
-        crop_w, crop_h = cropped_box.size
-        
-        # 「上からどれくらい削られたか」 = 元の高さ - 下に残った画像の高さ
-        # （※厳密にはboxのY座標が知りたいけど、簡易的に「下合わせ」で計算するね）
-        # もし「上だけ切りたい（下はそのまま）」なら、枠の下辺は一番下まで伸ばしておいてね！
-        
+        # 受け取った座標（left, top, width, height）を整理
+        c_left = box_coords['left']
+        c_top = box_coords['top']
+        c_width = box_coords['width']
+        c_height = box_coords['height']
+        # 右端と下端の座標を計算
+        c_right = c_left + c_width
+        c_bottom = c_top + c_height
+
+        # --- 他の画像にも適用するために「比率」を計算しておくよ ---
+        # (画像サイズが微妙に違っても対応できるようにするため)
+        ratio_left = c_left / orig_w
+        ratio_top = c_top / orig_h
+        ratio_right = c_right / orig_w
+        ratio_bottom = c_bottom / orig_h
+
     with col2:
         st.write("🎬 仕上がりプレビュー")
-        st.image(cropped_box, caption="今の設定だとこうなるよ！", use_column_width=True)
+        # 座標を使ってプレビュー画像を作成
+        preview_img = first_image.crop((c_left, c_top, c_right, c_bottom))
+        st.image(preview_img, caption="この範囲で全画像をカットするよ！", use_column_width=True)
         
-        # カットする高さを計算（単純に、元の高さと今の高さの差分を計算）
-        cut_pixels = orig_h - crop_h
-        st.metric(label="上からカットされる量", value=f"約 {cut_pixels} px")
+        st.write("---")
+        st.write(f"📐 **カット情報 (1枚目基準)**")
+        st.write(f"- 上カット: {c_top} px")
+        st.write(f"- 下カット: {orig_h - c_bottom} px")
 
     # --- 2. 全画像に適用してダウンロード ---
-    if st.button("この設定で全画像を処理してZIP作成！🍄"):
+    st.write("---")
+    if st.button("この設定で全画像を処理してZIP作成！🍄", type="primary"):
         
-        # ZIPを作る
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, "w") as zf:
-            # プログレスバー（進捗バー）を出してみる！
             progress_bar = st.progress(0)
             
             for i, uploaded_file in enumerate(uploaded_files):
                 try:
                     img = Image.open(uploaded_file)
-                    width, height = img.size
+                    curr_w, curr_h = img.size
                     
-                    # プレビューで決まった「上からカットする量」を使ってトリミング
-                    # (0, cut_pixels, width, height) -> 左, 上, 右, 下
-                    if height > cut_pixels:
-                        # 念のため、画像からはみ出さないように調整
-                        final_crop = img.crop((0, cut_pixels, width, height))
+                    # さっき計算した「比率」を使って、この画像のカット位置を計算
+                    new_left = int(curr_w * ratio_left)
+                    new_top = int(curr_h * ratio_top)
+                    new_right = int(curr_w * ratio_right)
+                    new_bottom = int(curr_h * ratio_bottom)
+
+                    # 念のため座標がはみ出さないように調整
+                    new_left = max(0, new_left)
+                    new_top = max(0, new_top)
+                    new_right = min(curr_w, new_right)
+                    new_bottom = min(curr_h, new_bottom)
+
+                    # トリミング実行！ (左, 上, 右, 下)
+                    final_crop = img.crop((new_left, new_top, new_right, new_bottom))
+                    
+                    # 保存処理
+                    img_byte_arr = io.BytesIO()
+                    # 元の拡張子を維持して保存
+                    img_format = uploaded_file.type.split('/')[-1].upper()
+                    if img_format == 'JPEG': img_format = 'JPEG' # Pillow用調整
+                    elif img_format == 'JPG': img_format = 'JPEG'
+                    
+                    # 万が一元のフォーマットが不明ならPNGにする
+                    save_format = img_format if img_format in ['PNG', 'JPEG'] else 'PNG'
                         
-                        # 保存処理
-                        img_byte_arr = io.BytesIO()
-                        img_format = uploaded_file.type.split('/')[-1].upper()
-                        if img_format == 'JPEG': img_format = 'JPEG'
-                        
-                        final_crop.save(img_byte_arr, format=img_format)
-                        zf.writestr(f"cut_{uploaded_file.name}", img_byte_arr.getvalue())
+                    final_crop.save(img_byte_arr, format=save_format)
+                    zf.writestr(f"cut_{uploaded_file.name}", img_byte_arr.getvalue())
                     
                 except Exception as e:
                     st.error(f"エラー: {uploaded_file.name} - {e}")
                 
-                # 進捗バーを更新
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
         st.success(f"完了！ {len(uploaded_files)}枚 処理したよ！")
@@ -90,7 +114,6 @@ if uploaded_files:
         st.download_button(
             label="📦 ダウンロードする",
             data=zip_buffer.getvalue(),
-            file_name="smart_cropped_images.zip",
-            mime="application/zip",
-            type="primary"
+            file_name="perfect_cropped_images.zip",
+            mime="application/zip"
         )
