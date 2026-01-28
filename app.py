@@ -2,7 +2,7 @@ import streamlit as st
 from PIL import Image
 import io
 import zipfile
-# 助っ人をインポート（座標を受け取れるようにするよ！）
+
 from streamlit_cropper import st_cropper
 
 st.set_page_config(page_title="スクショ切り取り職人V4", layout="wide")
@@ -62,6 +62,8 @@ if uploaded_files:
         st.write(f"- 上カット: {c_top} px")
         st.write(f"- 下カット: {orig_h - c_bottom} px")
 
+   # ... (上のimport部分はそのまま)
+
     # --- 2. 全画像に適用してダウンロード ---
     st.write("---")
     if st.button("この設定で全画像を処理してZIP作成！🍄", type="primary"):
@@ -71,38 +73,39 @@ if uploaded_files:
         with zipfile.ZipFile(zip_buffer, "w") as zf:
             progress_bar = st.progress(0)
             
+            # 【変更点】enumerateを使って、0から順番に番号を振るよ！
             for i, uploaded_file in enumerate(uploaded_files):
                 try:
                     img = Image.open(uploaded_file)
                     curr_w, curr_h = img.size
                     
-                    # さっき計算した「比率」を使って、この画像のカット位置を計算
+                    # --- さっきの比率計算ロジック（そのまま） ---
                     new_left = int(curr_w * ratio_left)
                     new_top = int(curr_h * ratio_top)
                     new_right = int(curr_w * ratio_right)
                     new_bottom = int(curr_h * ratio_bottom)
 
-                    # 念のため座標がはみ出さないように調整
                     new_left = max(0, new_left)
                     new_top = max(0, new_top)
                     new_right = min(curr_w, new_right)
                     new_bottom = min(curr_h, new_bottom)
 
-                    # トリミング実行！ (左, 上, 右, 下)
                     final_crop = img.crop((new_left, new_top, new_right, new_bottom))
                     
                     # 保存処理
                     img_byte_arr = io.BytesIO()
-                    # 元の拡張子を維持して保存
                     img_format = uploaded_file.type.split('/')[-1].upper()
-                    if img_format == 'JPEG': img_format = 'JPEG' # Pillow用調整
+                    if img_format == 'JPEG': img_format = 'JPEG'
                     elif img_format == 'JPG': img_format = 'JPEG'
-                    
-                    # 万が一元のフォーマットが不明ならPNGにする
                     save_format = img_format if img_format in ['PNG', 'JPEG'] else 'PNG'
                         
                     final_crop.save(img_byte_arr, format=save_format)
-                    zf.writestr(f"cut_{uploaded_file.name}", img_byte_arr.getvalue())
+                    
+                    # 【ここがポイント！】ファイル名に連番をつける (001_画像名.jpg)
+                    # これでスマホ側でも順番が守られるよ！
+                    new_filename = f"{i+1:03d}_{uploaded_file.name}"
+                    
+                    zf.writestr(new_filename, img_byte_arr.getvalue())
                     
                 except Exception as e:
                     st.error(f"エラー: {uploaded_file.name} - {e}")
